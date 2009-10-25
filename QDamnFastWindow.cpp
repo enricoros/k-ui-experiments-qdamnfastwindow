@@ -17,8 +17,8 @@
 #include <QPlastiqueStyle>
 
 #define TITLEBAR_HEIGHT 20
-#define SHADOW_SIZE 10
-#define BORDER_SIZE 2
+#define SHADOW_SIZE 16
+#define BORDER_SIZE 0
 
 QDamnFastWindow::QDamnFastWindow(QWidget *parent)
   : QWidget(parent)
@@ -41,10 +41,15 @@ QDamnFastWindow::QDamnFastWindow(QWidget *parent)
 
     // mouse tracking (for resizing)
     setMouseTracking(true);
+
+    // load tiles
+    for (int i = 0; i < 9; i++)
+        m_shadowTile[i].load(QLatin1String(":/tiles/") + QString::number(i) + QLatin1String(".png"));
 }
 
 QDamnFastWindow::~QDamnFastWindow()
 {
+    delete m_centralWidget;
 }
 
 void QDamnFastWindow::setCentralWidget(QWidget * widget)
@@ -65,31 +70,31 @@ QWidget * QDamnFastWindow::centralWidget() const
 
 QSize QDamnFastWindow::minimumSizeHint()
 {
-    return QSize(50, 30);
+    return m_centralWidget ? m_centralWidget->minimumSizeHint().expandedTo(QSize(64, 64)) : QSize(64, 64);
 }
 
 void QDamnFastWindow::mousePressEvent(QMouseEvent * event)
 {
-    if (event->button() != Qt::LeftButton)
-        return;
+    if (event->button() == Qt::LeftButton) {
+        // eventually start move
+        const QPoint pos = event->pos();
+        if (m_titleRect.contains(pos)) {
+            m_moving = true;
+            m_anchorOffset = pos;
+            setCursor(Qt::SizeAllCursor);
+            return;
+        }
 
-    // eventually start move
-    const QPoint pos = event->pos();
-    if (m_titleRect.contains(pos)) {
-        m_moving = true;
-        m_anchorOffset = pos;
-        setCursor(Qt::SizeAllCursor);
-        return;
-    }
-
-    // eventually start resize
-    for (int i = 0; i < 9; i++) {
-        if (i == 4)
-            continue;
-        m_resizing = true;
-        m_resizeAnchor = i;
-        m_anchorOffset = pos;
-        return;
+        // eventually start resize
+        for (int i = 0; i < 9; i++) {
+            if (i == 4 || !m_shadowRect[i].contains(pos))
+                continue;
+            m_resizing = true;
+            m_beginGeometry = geometry();
+            m_anchorOffset = pos;
+            m_resizeAnchor = i;
+            return;
+        }
     }
 }
 
@@ -100,8 +105,25 @@ void QDamnFastWindow::mouseMoveEvent(QMouseEvent * event)
         move(event->globalPos() - m_anchorOffset);
     } else if (m_resizing) {
         // window resize
-        qWarning("res");
-
+        const QPoint pos = event->globalPos();
+        QRect newGeometry = m_beginGeometry;
+        switch (m_resizeAnchor) {
+            case 0: newGeometry.setTopLeft(pos); break;
+            case 1: newGeometry.setTop(pos.y()); break;
+            case 2: newGeometry.setTopRight(pos); break;
+            case 3: newGeometry.setLeft(pos.x()); break;
+            case 5: newGeometry.setRight(pos.x()); break;
+            case 6: newGeometry.setBottomLeft(pos); break;
+            case 7: newGeometry.setBottom(pos.y()); break;
+            case 8: newGeometry.setBottomRight(pos); break;
+        }
+        QSize minSize = minimumSizeHint();
+        if (newGeometry.width() < minSize.width())
+            newGeometry.setWidth(minSize.width());
+        if (newGeometry.height() < minSize.height())
+            newGeometry.setHeight(minSize.height());
+        if (newGeometry != geometry())
+            setGeometry(newGeometry);
     } else {
         // just hovering: change cursors
         const QPoint pos = event->pos();
@@ -132,44 +154,37 @@ void QDamnFastWindow::paintEvent(QPaintEvent * event)
     QPainter windowPainter(this);
     windowPainter.setCompositionMode(QPainter::CompositionMode_Source);
     QColor windowColor = palette().color(QPalette::Window);
+    QRect exposedRect = event->rect();
 
     // shadow
-  //  for (int i = 0; i < 9; i++)
-    //    windowPainter.fillRect(m_shadowRect[i], QColor::fromHsv(qrand()%360, 255,255, 128));
+    windowPainter.setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform, false);
+    for (int i = 0; i < 9; i++)
+        if (m_shadowRect[i].intersects(exposedRect) && i != 4)
+            windowPainter.drawPixmap(m_shadowRect[i], m_shadowTile[i]);
 
     // title pixmap
-    if (m_cachedTitlePixmap.size() != m_titleRect.size() || m_cachedTitleString != windowTitle()) {
-        m_cachedTitlePixmap = QPixmap(m_titleRect.size());
-        QPainter pixPainter(&m_cachedTitlePixmap);
-        pixPainter.setCompositionMode(QPainter::CompositionMode_Source);
-        pixPainter.fillRect(m_cachedTitlePixmap.rect(), windowColor);
-        pixPainter.setFont(QFont("Sans Serif", 9, QFont::Bold));
-        pixPainter.drawText(m_cachedTitlePixmap.rect(), Qt::AlignCenter, windowTitle());
-        m_cachedTitleString = windowTitle();
+    if (m_titleRect.intersects(exposedRect)) {
+        windowPainter.setFont(QFont(QLatin1String("Sans Serif"), 9, QFont::Bold));
+        windowPainter.drawText(m_titleRect, Qt::AlignCenter, windowTitle());
     }
-    windowPainter.drawPixmap(m_titleRect.topLeft(), m_cachedTitlePixmap);
 
     // border
-    int halfPen = m_borderWidth / 2;
-    windowPainter.setPen(QPen(windowColor, m_borderWidth));
-    windowPainter.setBrush(Qt::NoBrush);
-    windowPainter.drawRect(m_borderRect.adjusted(halfPen, halfPen, -halfPen, -halfPen));
+    if (BORDER_SIZE) {
+        int halfPen = m_borderWidth / 2;
+        windowPainter.setPen(QPen(windowColor, m_borderWidth));
+        windowPainter.setBrush(Qt::NoBrush);
+        windowPainter.drawRect(m_borderRect.adjusted(halfPen, halfPen, -halfPen, -halfPen));
+    }
 
     // inner fill (TODO: can be removed using a non-transparent ARGB filling)
-    windowPainter.fillRect(m_centralRect, windowColor);
+    windowPainter.fillRect(m_centralRect.intersected(exposedRect), windowColor);
 }
 
 void QDamnFastWindow::resizeEvent(QResizeEvent *)
 {
-    // layout the central widget
     calcRects(rect());
     if (m_centralWidget)
         m_centralWidget->setGeometry(m_centralRect);
-
-    // invalidate pixmaps ?
-
-    // update gfx
-    update();
 }
 
 void QDamnFastWindow::calcRects(const QRect & baseRect)
@@ -196,6 +211,11 @@ void QDamnFastWindow::calcRects(const QRect & baseRect)
     
     // other rects
     m_borderRect = m_shadowRect[4];
-    m_titleRect = QRect(sx[1] + BORDER_SIZE, sy[1] + BORDER_SIZE, sInnerWidth - BORDER_SIZE - BORDER_SIZE, TITLEBAR_HEIGHT);
-    m_centralRect = QRect(sx[1] + BORDER_SIZE, sy[1]+ BORDER_SIZE + TITLEBAR_HEIGHT, sInnerWidth - BORDER_SIZE - BORDER_SIZE, sInnerHeight - BORDER_SIZE - BORDER_SIZE - TITLEBAR_HEIGHT);
+    if (!windowTitle().isEmpty()) {
+        m_titleRect = QRect(sx[1] + BORDER_SIZE, sy[1] + BORDER_SIZE, sInnerWidth - BORDER_SIZE - BORDER_SIZE, TITLEBAR_HEIGHT);
+        m_centralRect = QRect(sx[1] + BORDER_SIZE, sy[1]+ BORDER_SIZE + TITLEBAR_HEIGHT, sInnerWidth - BORDER_SIZE - BORDER_SIZE, sInnerHeight - BORDER_SIZE - BORDER_SIZE - TITLEBAR_HEIGHT);
+    } else {
+        m_titleRect = QRect();
+        m_centralRect = QRect(sx[1] + BORDER_SIZE, sy[1]+ BORDER_SIZE, sInnerWidth - BORDER_SIZE - BORDER_SIZE, sInnerHeight - BORDER_SIZE - BORDER_SIZE);
+    }
 }

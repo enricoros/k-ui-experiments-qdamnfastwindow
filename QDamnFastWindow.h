@@ -49,10 +49,12 @@ class QDamnFastWindow : public QWidget
 
         QString m_cachedTitleString;
         QPixmap m_cachedTitlePixmap;
+        QPixmap m_shadowTile[9];
 
         bool m_resizing;
         bool m_moving;
         int m_resizeAnchor;
+        QRect m_beginGeometry;
         QPoint m_anchorOffset;
 };
 
